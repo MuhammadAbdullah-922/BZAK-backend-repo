@@ -8,6 +8,7 @@ use App\Models\Payment;
 use App\Models\Product;
 use App\Models\Coupon;
 use App\Models\Inventory;
+use App\Models\Review;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use App\Mail\OrderPlaced;
@@ -151,10 +152,28 @@ class OrderController extends Controller
 
     public function index(Request $request)
     {
-        $orders = Order::where('user_id', $request->user()->id)
+        $userId = $request->user()->id;
+
+        $orders = Order::where('user_id', $userId)
             ->with('items')
             ->latest()
             ->paginate(10);
+
+        // Fetch every product_id this user has already reviewed, once,
+        // instead of running a query per item (N+1 avoided).
+        $reviewedProductIds = Review::where('user_id', $userId)
+            ->pluck('product_id')
+            ->all();
+
+        // Stamp has_review onto each item so the frontend can show the
+        // "Reviewed" badge correctly even after a page refresh.
+        $orders->getCollection()->transform(function ($order) use ($reviewedProductIds) {
+            $order->items->transform(function ($item) use ($reviewedProductIds) {
+                $item->has_review = in_array($item->product_id, $reviewedProductIds);
+                return $item;
+            });
+            return $order;
+        });
 
         return response()->json([
             'success' => true,

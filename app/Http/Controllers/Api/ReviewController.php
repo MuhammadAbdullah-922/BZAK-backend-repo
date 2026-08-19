@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Review;
 use App\Models\Product;
+use App\Models\Order;
+use App\Models\OrderItem;
 use Illuminate\Http\Request;
 
 class ReviewController extends Controller
@@ -35,8 +37,34 @@ class ReviewController extends Controller
             'comment' => 'nullable|string',
         ]);
 
+        $userId = $request->user()->id;
+
+        // ---------------------------------------------------------
+        // VERIFIED PURCHASE CHECK
+        // A review is only allowed if this user has at least one
+        // DELIVERED order that contains this product.
+        //
+        // ADJUST the column/table names below to match your schema
+        // if it differs from: orders(id, user_id, status)
+        //                     order_items(order_id, product_id)
+        // ---------------------------------------------------------
+        $hasDeliveredOrder = OrderItem::where('product_id', $productId)
+            ->whereHas('order', function ($query) use ($userId) {
+                $query->where('user_id', $userId)
+                      ->where('status', 'delivered');
+            })
+            ->exists();
+
+        if (!$hasDeliveredOrder) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You can only review products from a delivered order.',
+            ], 403);
+        }
+
+        // One review per product per user (kept from original logic)
         $existing = Review::where('product_id', $productId)
-            ->where('user_id', $request->user()->id)
+            ->where('user_id', $userId)
             ->first();
 
         if ($existing) {
@@ -47,11 +75,11 @@ class ReviewController extends Controller
         }
 
         $review = Review::create([
-            'product_id' => $productId,
-            'user_id'    => $request->user()->id,
-            'rating'     => $request->rating,
-            'title'      => $request->title,
-            'comment'    => $request->comment,
+            'product_id'  => $productId,
+            'user_id'     => $userId,
+            'rating'      => $request->rating,
+            'title'       => $request->title,
+            'comment'     => $request->comment,
             'is_approved' => false,
         ]);
 
