@@ -27,16 +27,19 @@ class OrderController extends Controller
             'shipping_address'    => 'required|string',
             'shipping_city'       => 'required|string',
             'shipping_phone'      => 'required|string',
-            // FIX: 'bank' was missing here, so Bank Transfer orders from the
-            // checkout page were failing validation (422) before reaching
-            // the order-creation logic at all.
             'payment_method'      => 'required|in:cod,online,jazzcash,easypaisa,bank',
-            // FIX: these were being sent by the frontend but silently
-            // dropped -- validate + persist them now.
             'transaction_id'      => 'nullable|string|max:100',
             'sender_number'       => 'nullable|string|max:30',
             'bank_reference'      => 'nullable|string|max:150',
         ]);
+
+        // GUEST CHECKOUT FIX: this route is now public (see routes/api.php),
+        // so there is no guaranteed authenticated user. Resolve the user
+        // via the sanctum guard explicitly and treat it as optional —
+        // $request->user() would throw on `->id` for guests since it
+        // returns null. A logged-in customer who sends a valid Bearer
+        // token will still be correctly attached to their order.
+        $user = $request->user('sanctum');
 
         $subtotal = 0;
         $orderItems = [];
@@ -90,8 +93,10 @@ class OrderController extends Controller
         $paymentStatus = 'pending';
 
         // Create Order
+        // GUEST CHECKOUT FIX: user_id is now nullable (see migration) and
+        // set to null for guests instead of crashing on $request->user()->id.
         $order = Order::create([
-            'user_id'          => $request->user()->id,
+            'user_id'          => optional($user)->id,
             'order_number'     => 'BZK-' . strtoupper(Str::random(8)),
             'status'           => 'pending',
             'subtotal'         => $subtotal,
@@ -119,11 +124,10 @@ class OrderController extends Controller
         }
 
         // Create Payment Record
-        // FIX: transaction_id / sender_number / bank_reference now actually
-        // get saved instead of being lost.
+        // GUEST CHECKOUT FIX: same nullable user_id handling as above.
         Payment::create([
             'order_id'       => $order->id,
-            'user_id'        => $request->user()->id,
+            'user_id'        => optional($user)->id,
             'amount'         => $total,
             'method'         => $request->payment_method,
             'status'         => $paymentStatus,
@@ -133,11 +137,13 @@ class OrderController extends Controller
         ]);
 
         // Send order confirmation email with tracking ID.
+        // Guests currently have no email on file (the checkout form
+        // doesn't collect one), so this only fires for logged-in users.
         // Wrapped in try/catch so a mail server hiccup never blocks the
         // customer's order from completing successfully.
         try {
-            if ($request->user()->email) {
-                Mail::to($request->user()->email)->send(new OrderPlaced($order));
+            if (optional($user)->email) {
+                Mail::to($user->email)->send(new OrderPlaced($order));
             }
         } catch (\Exception $e) {
             \Log::error('Order confirmation email failed: ' . $e->getMessage());
@@ -243,13 +249,16 @@ public function updatePaymentStatus(Request $request, Order $order)
     }
 
     /**
-     * NEW: upload a payment screenshot for an already-placed order
+     * Upload a payment screenshot for an already-placed order
      * (JazzCash / EasyPaisa / Bank Transfer). Called right after store()
      * succeeds on the checkout page, using the order_number it returned.
      *
-     * Kept as a separate step (instead of bundling the file into the
-     * order-creation request) so the existing JSON order payload doesn't
-     * have to be rebuilt as multipart/form-data.
+     * GUEST CHECKOUT FIX: this route is now public (see routes/api.php) so
+     * guests without a login token can still upload their proof for the
+     * order they just placed. Authorization is based on the order_number
+     * itself (a random, unguessable token — same trust model already used
+     * by the public track() endpoint above), with an extra ownership check
+     * for orders that DO belong to a logged-in account.
      */
     public function uploadPaymentProof(Request $request, $orderNumber)
     {
@@ -259,9 +268,19 @@ public function updatePaymentStatus(Request $request, Order $order)
         ]);
 
         $order = Order::where('order_number', $orderNumber)
-            ->where('user_id', $request->user()->id)
             ->with('payment')
             ->firstOrFail();
+
+        // If this order is tied to a registered account, only that same
+        // account may attach a payment proof to it. Guest orders
+        // (user_id null) have no such restriction — the order_number is
+        // the credential.
+        if ($order->user_id) {
+            $user = $request->user('sanctum');
+            if (!$user || $user->id !== $order->user_id) {
+                abort(403, 'You are not authorized to upload proof for this order.');
+            }
+        }
 
         if (!$order->payment) {
             return response()->json([

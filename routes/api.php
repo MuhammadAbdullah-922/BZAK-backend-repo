@@ -58,6 +58,21 @@ Route::get('/footer-gallery/{id}', [FooterGalleryController::class, 'show']);
 // Coupon Apply
 Route::post('/coupons/apply', [CouponController::class, 'apply']);
 
+// GUEST CHECKOUT FIX: order creation must be reachable WITHOUT a login
+// token, otherwise every guest checkout hits a 401 before it ever reaches
+// OrderController@store. It stays public here; OrderController now treats
+// the authenticated user as optional (see store()), so a logged-in
+// customer sending a valid Bearer token is still correctly attached to
+// their order, while a guest with no token can check out too.
+Route::post('/orders', [OrderController::class, 'store']);
+
+// GUEST CHECKOUT FIX: the payment-proof screenshot step (JazzCash /
+// EasyPaisa / Bank Transfer) runs immediately after a guest places an
+// order, so it must also be reachable without a token. Authorization is
+// handled inside the controller using the order_number itself, the same
+// trust model already used by the public track() endpoint above.
+Route::post('/orders/{orderNumber}/payment-proof', [OrderController::class, 'uploadPaymentProof']);
+
 // =============================================
 // CUSTOMER ROUTES — Login Required
 // =============================================
@@ -72,12 +87,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/profile/avatar', [AuthController::class, 'uploadAvatar']);
     
 
-    // Orders
+    // Orders — viewing/listing your own order history still requires login.
+    // Creating an order and uploading its payment proof do NOT (moved to
+    // the public section above) so guest checkout works.
     Route::get('/orders',           [OrderController::class, 'index']);
-    Route::post('/orders',          [OrderController::class, 'store']);
     Route::get('/orders/{orderNumber}', [OrderController::class, 'show']);
-    // NEW — screenshot upload for JazzCash/EasyPaisa/Bank proof
-    Route::post('/orders/{orderNumber}/payment-proof', [OrderController::class, 'uploadPaymentProof']);
 
     // Reviews — Write
     Route::post('/products/{productId}/reviews', [ReviewController::class, 'store']);
