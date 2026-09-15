@@ -47,6 +47,7 @@ Route::post('/newsletter', [NewsletterController::class, 'subscribe']);
 Route::get('/products',              [ProductController::class, 'index']);
 Route::get('/products/featured',     [ProductController::class, 'featured']);
 Route::get('/products/new-arrivals', [ProductController::class, 'newArrivals']);
+Route::get('/products/colors', [ProductController::class, 'colors']);
 Route::get('/products/popular',      [ProductController::class, 'popular']);   // ADD THIS
 Route::get('/products/{slug}',       [ProductController::class, 'show']);      // must stay last
 
@@ -129,12 +130,14 @@ Route::delete('/footer-gallery/{id}', [FooterGalleryController::class, 'destroy'
 Route::put('admin/footer-gallery/{id}/status', [FooterGalleryController::class, 'toggleStatus']);
 
 
+
         // Products CRUD
         Route::get('/products',         [AdminProductController::class, 'index']);
         Route::post('/products',        [AdminProductController::class, 'store']);
         Route::get('/products/{id}',    [AdminProductController::class, 'show']);
         Route::put('/products/{id}',    [AdminProductController::class, 'update']);
         Route::delete('/products/{id}', [AdminProductController::class, 'destroy']);
+        
 
         // Orders Management
         Route::get('/orders',                     [AdminOrderController::class, 'index']);
