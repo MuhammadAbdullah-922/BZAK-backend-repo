@@ -10,6 +10,9 @@ use Illuminate\Support\Facades\Storage;
 
 class ProductController extends Controller
 {
+    // Client requirement: max 3 images per product (admin panel + storage).
+    private const MAX_IMAGES = 3;
+
     public function index(Request $request)
     {
         $query = Product::with('category');
@@ -41,9 +44,13 @@ class ProductController extends Controller
             'sale_price'        => 'nullable|numeric|min:0',
             'sizes'             => 'nullable|array',
             'colors'            => 'nullable|array',
-            'images'            => 'nullable|array',
+            // A brand-new product has no existing images yet, so a simple
+            // max rule on the incoming array is enough here.
+            'images'            => 'nullable|array|max:' . self::MAX_IMAGES,
             'images.*'          => 'image|mimes:jpg,jpeg,png,webp|max:2048',
             'sku'               => 'nullable|string|unique:products',
+        ], [
+            'images.max' => 'Aap sirf ' . self::MAX_IMAGES . ' images upload kar sakte hain.',
         ]);
 
         // Everything except the raw file objects
@@ -102,14 +109,19 @@ class ProductController extends Controller
         $product = Product::findOrFail($id);
 
         $request->validate([
-            'category_id' => 'required|exists:categories,id',
-            'name'        => 'required|string|max:255',
-            'price'       => 'required|numeric|min:0',
-            'sku'         => 'nullable|string|unique:products,sku,' . $id,
-            'images'      => 'nullable|array',
-            'images.*'    => 'image|mimes:jpg,jpeg,png,webp|max:2048',
+            'category_id'     => 'required|exists:categories,id',
+            'name'            => 'required|string|max:255',
+            'price'           => 'required|numeric|min:0',
+            'sku'             => 'nullable|string|unique:products,sku,' . $id,
+            // Note: this only caps the *new* files in this single request.
+            // The real "existing + new <= MAX_IMAGES" check happens below,
+            // since existing images already saved don't show up here.
+            'images'          => 'nullable|array|max:' . self::MAX_IMAGES,
+            'images.*'        => 'image|mimes:jpg,jpeg,png,webp|max:2048',
             'remove_images'   => 'nullable|array',
             'remove_images.*' => 'string',
+        ], [
+            'images.max' => 'Aap sirf ' . self::MAX_IMAGES . ' images upload kar sakte hain.',
         ]);
 
         $data = $request->except('images', 'remove_images', 'quantity');
@@ -124,17 +136,33 @@ class ProductController extends Controller
 
         // Remove any images the admin explicitly deleted
         if ($request->filled('remove_images')) {
-            foreach ($request->remove_images as $path) {
-                Storage::disk('public')->delete($path);
-            }
             $currentImages = array_values(array_diff($currentImages, $request->remove_images));
         }
 
-        // Append any newly uploaded images
-        if ($request->hasFile('images')) {
-            foreach ($request->file('images') as $file) {
-                $currentImages[] = $file->store('products', 'public');
+        // New files about to be uploaded
+        $newFiles = $request->hasFile('images') ? $request->file('images') : [];
+
+        // The real cap: images staying on the product (after removals) +
+        // newly uploaded ones must not exceed MAX_IMAGES.
+        $totalAfterUpdate = count($currentImages) + count($newFiles);
+        if ($totalAfterUpdate > self::MAX_IMAGES) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aap sirf ' . self::MAX_IMAGES . ' images per product rakh sakte hain. '
+                    . 'Filhal ' . count($currentImages) . ' rakhi hui hain aur ' . count($newFiles) . ' nayi bhej rahe hain.',
+            ], 422);
+        }
+
+        // Only delete removed files from disk once we know the request is valid.
+        if ($request->filled('remove_images')) {
+            foreach ($request->remove_images as $path) {
+                Storage::disk('public')->delete($path);
             }
+        }
+
+        // Append any newly uploaded images
+        foreach ($newFiles as $file) {
+            $currentImages[] = $file->store('products', 'public');
         }
 
         $data['images'] = $currentImages;
